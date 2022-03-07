@@ -1,0 +1,348 @@
+---
+title: "Data mining exercise2"
+output: md_document
+---
+Author: 
+JIYOU CHEN
+LIMING PANG
+YUXIN FENG
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Question 1
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+
+capmetro_UT <- read.csv("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/capmetro_UT.csv")
+capmetro_UT = mutate(capmetro_UT,
+                     day_of_week = factor(day_of_week,
+                                          levels=c("Mon", "Tue", "Wed","Thu", "Fri", "Sat", "Sun")),
+                     month = factor(month,
+                                    levels=c("Sep", "Oct","Nov")))
+```
+
+##problem 1.1
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+avg_bordings=capmetro_UT%>%
+  group_by(month,day_of_week,hour_of_day)%>%
+  summarize(avg_bordings=mean(boarding))
+
+ggplot()+geom_line(data=avg_bordings,mapping=aes(x=hour_of_day,y=avg_bordings,color=month))+
+  facet_wrap(~day_of_week)+
+  scale_x_continuous(breaks=seq(6,24,3))
+```
+As shown in the chart, the peak boarding times on weekdays (i.e., Monday through Friday) show a very similar trend throughout the day. Each day of the workday peaks between 15 and 18 o 'clock. However, the trend on Saturday and Sunday is much flatter than it is on weekdays. Meanwhile, it is difficult to identify the peak time. Although the trend is the same on Saturday and Sunday.
+
+Students in September have just finished the long summer vacation, so they are not able to quickly get into the rhythm of study, so they will not go to school on Monday after the weekend.
+
+Wednesdays through Fridays in November are the Thanksgiving holiday, and few students take the bus these days, which directly lowers the average ridership.
+
+
+##problem 1.2
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+ggplot(data=capmetro_UT,aes(x=temperature,y=boarding,color=weekend))+
+  geom_point(alpha=0.5)+
+  facet_wrap(~hour_of_day)
+```
+In fact, according to the graph drawn from the data, temperature has no significant influence on UT students' bus ride, and the influence on them is still mainly time change. The number of bus passengers on weekends is still less than on weekdays, no matter how the temperature changes.
+  
+#Question 2
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(rsample)
+library(caret)
+library(modelr)
+library(parallel)
+library(foreach)
+library(mosaic)
+data(SaratogaHouses)
+
+##Part I
+K_folds = 5
+Sara_folds = crossv_kfold(SaratogaHouses, k=K_folds)
+
+saratoga_split = initial_split(SaratogaHouses, prop = 0.8)
+saratoga_train = training(saratoga_split)
+saratoga_test = testing(saratoga_split)
+
+lm1 = lm(price ~ lotSize + bedrooms + bathrooms, data=saratoga_train )
+lm2 = lm(price ~ . - pctCollege - sewer - waterfront - landValue - newConstruction,
+                               data=saratoga_train )
+lm3 = lm(price ~ (. - pctCollege - sewer - waterfront - landValue - newConstruction)^2,
+                               data=saratoga_train )
+lm4 = lm(price ~ (. - pctCollege - sewer - newConstruction + rooms:bathrooms + livingArea:rooms),
+                                 data=saratoga_train )
+
+
+errs_lm1 = rmse(lm1, saratoga_test)
+errs_lm2 = rmse(lm2, saratoga_test)
+errs_lm3 = rmse(lm3, saratoga_test)
+errs_lm4 = rmse(lm4, saratoga_test)
+
+c(errs_lm1 = mean(errs_lm1), errs_lm2= mean(errs_lm2), errs_lm3 = mean(errs_lm3), errs_lm4 =  mean(errs_lm4))
+
+```
+
+##Part II
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+k_grid = c(2, 4, 6, 8, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 125, 150, 175, 200, 250, 300)
+
+SaratogaHouses$rooms_scaled<-scale(SaratogaHouses$rooms)
+
+###Feature, lm1
+cv_Sara_knn1 = foreach(k = k_grid, .combine='rbind') %dopar% {
+  models = map(Sara_folds$train, ~ knnreg(price ~ lotSize + bedrooms + bathrooms,
+                                        data = ., k=k, use.all=FALSE))
+  errs = map2_dbl(models, Sara_folds$test, modelr::rmse)
+  c(k=k, err = mean(errs), std_err = sd(errs)/sqrt(K_folds))
+} %>% as.data.frame
+
+k_min_rmse_Sara1 = cv_Sara_knn1 %>%
+  slice_min(err) %>%
+  pull(k)
+cv_Sara_knn1_err = cv_Sara_knn1 %>% filter(k==k_min_rmse_Sara1)
+
+rbind(knn1 = cv_Sara_knn1_err)
+
+###Feature, lm2
+cv_Sara_knn2 = foreach(k = k_grid, .combine='rbind') %dopar% {
+  models = map(Sara_folds$train, ~ knnreg(price ~ (. - pctCollege - sewer - waterfront - landValue - newConstruction)
+                                        , data = ., k=k, use.all=FALSE))
+  errs = map2_dbl(models, Sara_folds$test, modelr::rmse)
+  c(k=k, err = mean(errs), std_err = sd(errs)/sqrt(K_folds))
+} %>% as.data.frame
+
+k_min_rmse_Sara2 = cv_Sara_knn2 %>%
+  slice_min(err) %>%
+  pull(k)
+cv_Sara_knn2_err = cv_Sara_knn2 %>% filter(k==k_min_rmse_Sara2)
+
+rbind(knn2 = cv_Sara_knn2_err)
+
+###Feature, lm3
+cv_Sara_knn3 = foreach(k = k_grid, .combine='rbind') %dopar% {
+  models = map(Sara_folds$train, ~ knnreg(price ~ (. - pctCollege - sewer - waterfront - landValue - newConstruction)^2
+                                          , data = ., k=k, use.all=FALSE))
+  errs = map2_dbl(models, Sara_folds$test, modelr::rmse)
+  c(k=k, err = mean(errs), std_err = sd(errs)/sqrt(K_folds))
+} %>% as.data.frame
+
+k_min_rmse_Sara3 = cv_Sara_knn3 %>%
+  slice_min(err) %>%
+  pull(k)
+cv_Sara_knn3_err = cv_Sara_knn3 %>% filter(k==k_min_rmse_Sara3)
+
+rbind(knn3 = cv_Sara_knn3_err)
+
+
+###Feature, lm4
+cv_Sara_knn4 = foreach(k = k_grid, .combine='rbind') %dopar% {
+  models = map(Sara_folds$train, ~ knnreg(price ~ (. - pctCollege - sewer - newConstruction + rooms:bathrooms + livingArea:rooms)
+                                          , data = ., k=k, use.all=FALSE))
+  errs = map2_dbl(models, Sara_folds$test, modelr::rmse)
+  c(k=k, err = mean(errs), std_err = sd(errs)/sqrt(K_folds))
+} %>% as.data.frame
+
+k_min_rmse_Sara4 = cv_Sara_knn3 %>%
+  slice_min(err) %>%
+  pull(k)
+cv_Sara_knn4_err = cv_Sara_knn3 %>% filter(k==k_min_rmse_Sara3)
+
+rbind(knn4 = cv_Sara_knn4_err)
+```
+
+
+##compare two models
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+c(errs_lm1 = mean(errs_lm1), errs_lm2= mean(errs_lm2), errs_lm3 = mean(errs_lm3), errs_lm4 =  mean(errs_lm4))
+rbind(knn1 = cv_Sara_knn1_err,knn2 = cv_Sara_knn2_err, knn3 = cv_Sara_knn3_err, knn4 = cv_Sara_knn4_err)
+
+
+### Linear regression model 4 have better performance.
+```
+
+report for question 2
+
+By adding and subtract variables, we find that a model that includes variables such as: rooms:bathrooms and living Area : rooms but not variables such as pctCollege, sewers and NewConstruction results in a better model. These results suggests that when the government make the tax policy need to focus on above variables.
+For example, a house with more rooms in living area has higher valuation. Also, during these rooms, the more bedrooms, the higher price of this house. Besides, customers do not concern about such as type of sewer or whether this house is new construction or not. These factors are not influence on the willingness of house buyer.
+Therefore, when the government is making tax policy on the real estate, the feature above said should be consider at first. More bedrooms are included in bathrooms, more rooms are included in living area have higher market value of properties and should be make higher tax policy on it.
+From the model's perspective, linear regression model performs better than KNN model. Linear regression is a parametric approach and K-Nearest Neighbors (KNN) is a non-parametric method. According to the result, KNN model 4 seems to do better performance (RMSE: 70486.78) during four KNN models. However, linear regression model 4 have lower out-of-sample mean-squared error (52387.44), which means it is the lowest out-of-sample mean-squared error in two types of models. So, linear regression model is a better model able to fit this data set. Therefore, linear regression model is the best price-modeling strategies among these two methods for taxing authority.
+
+
+
+
+#Question3
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggplot2)
+german_credit <- read.csv("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/german_credit.csv")
+```
+
+##Bar plot of default probability by credit history
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+D_C=german_credit%>%
+  group_by(history)%>%
+  summarize(Default_probability=sum(Default, na.rm=TRUE)/n())
+ggplot(data=D_C,aes(x=history,y=Default_probability))+
+  geom_col()+labs(title="Default probability by credit history")
+```
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+g_c_logit = glm(formula = Default ~ duration + amount + installment + age + 
+                history + purpose + foreign, data = german_credit,family = "binomial")
+summary(g_c_logit)
+```
+History has the negative related with default, and it is statistically significant. So, this means people who with good credit are more likely to default. This is contrary to the facts.
+Therefore this is not a good model. The reason is that bank make a lot of matching for defaults, which directly reduces the proportion of non-defaulters in the entire bank credit system, leading to the deviation of the accuracy of the model.
+I would suggest that banks adopt random sampling to consider the true proportion of each credit tier in the entire banking system and conduct regression analysis.
+
+
+#Question 4
+##Baseline1
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+library(ggplot2)
+library(tidyverse)
+library(mosaic)
+library(modelr)
+library(rsample)
+library(MASS)
+library(caret)
+library(foreach)
+library(FNN)
+
+hotels_dev <- read.csv("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/hotels_dev.csv")
+hotels_val <- read.csv("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/hotels_val.csv")
+lm_medium1=lm(children~market_segment+adults+customer_type+is_repeated_guest,data = hotels_dev)
+getCall(lm_medium1)
+```
+##baseline2
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+lm_medium2=lm(children~.-(arrival_date)-(children),data = hotels_dev)
+getCall(lm_medium2)
+```
+
+##New model
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+lm0=lm(children ~ 1, data=hotels_dev)
+lm_forward=step(lm0, direction='forward',scope=~(lead_time+stays_in_weekend_nights+poly(adults,2)+average_daily_rate+meal+market_segment+customer_type+is_repeated_guest)^2)
+
+```
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+getCall(lm_forward)
+```
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+rmse = function(y, yhat) {
+  sqrt( mean( (y - yhat)^2 ) )
+}
+
+hotels_dev_split = initial_split(hotels_dev, prop = 0.8)
+hotels_dev_train = training(hotels_dev_split)
+hotels_dev_test = testing(hotels_dev_split)
+
+lm_hotels_dev_train1 = lm(children ~ market_segment+adults+customer_type+is_repeated_guest,data = hotels_dev_train)
+lm_hotels_dev_train2 = lm(children ~.-(arrival_date)-(children),data = hotels_dev_train)
+lm_hotels_dev_train3 = lm(children ~ average_daily_rate + market_segment + 
+    meal + poly(adults, 2) + customer_type + lead_time + is_repeated_guest + 
+    average_daily_rate:market_segment + average_daily_rate:poly(adults, 
+    2) + market_segment:poly(adults, 2) + average_daily_rate:meal + 
+    poly(adults, 2):customer_type + average_daily_rate:customer_type + 
+    market_segment:customer_type + meal:poly(adults, 2) + average_daily_rate:lead_time + 
+    poly(adults, 2):lead_time + market_segment:lead_time + meal:lead_time + 
+    customer_type:lead_time + meal:customer_type + average_daily_rate:is_repeated_guest + 
+    lead_time:is_repeated_guest + poly(adults, 2):is_repeated_guest, 
+    data = hotels_dev_train)
+
+yhat1=predict(lm_hotels_dev_train1,hotels_dev_test)
+yhat2=predict(lm_hotels_dev_train2,hotels_dev_test)
+yhat3=predict(lm_hotels_dev_train3,hotels_dev_test)
+baseline1_rmse=RMSE(yhat1, hotels_dev_test$children)
+baseline2_rmse=RMSE(hotels_dev_test$children,yhat2)
+mymodel_rmse=RMSE(yhat3, hotels_dev_test$children)
+
+```
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+c(baseline1_rmse,baseline2_rmse,mymodel_rmse)
+
+###My model doesn't perform well out of sample.
+```
+#Model validation: step 1
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+lm_val = update(lm_forward, data=hotels_dev)
+hotel_val_hat= predict(lm_val, hotels_val)
+```
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+rmse(hotels_val$children,hotel_val_hat)
+```
+With new dataset, rmse of new set is smaller than rmse of split set, but still 
+close. The rmse of baseline2 is still the lowest.
+
+
+##ROC
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+phat_hotel_val= predict(lm_forward, hotels_val, type='response')
+thresh_grid = 0.5
+thresh_grid = seq(0.95, 0.05, by=-0.005)
+roc_curve = foreach(thresh = thresh_grid, .combine='rbind') %do% {
+  yhat_test = ifelse(phat_hotel_val >= thresh, 1, 0)
+  # FPR, TPR for linear model
+  confusion_out = table(y = hotels_val$children, yhat = yhat_test)
+  outcome = data.frame(TPR = confusion_out[2,2]/sum(hotels_val$children==1),
+                       FPR = confusion_out[1,2]/sum(hotels_val$children==0))
+  rbind(outcome)
+} %>% as.data.frame()
+ggplot(roc_curve) + 
+  geom_line(aes(x=FPR, y=TPR)) + 
+  theme_bw(base_size = 10)
+```
+
+```{r, echo=FALSE,message=FALSE, warning=FALSE}
+sum=apply(matrix(phat_hotel_val, 250, 20), 2, sum)
+
+sum2=apply(matrix(hotels_val$children, 250, 20), 2, sum)
+
+number=c(1:20)
+all=data.frame(cbind(number,sum,sum2))
+
+ggplot(data=all)+
+  geom_line(aes(x=number,y=sum,color='red'))+
+  geom_line(aes(x=number,y=sum2,color='blue'))+
+  scale_color_discrete(labels = c("actual","predict"))
+
+###The prediction is not as good as we thought, and the actual numbers fluctuate more violently than predict probability.
+```
+
+
+
+
+
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
